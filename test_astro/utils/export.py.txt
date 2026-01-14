@@ -1,0 +1,981 @@
+"""
+Système d'export des résultats astrologiques
+Support multiple formats : PDF, SVG, JSON, CSV, TXT
+"""
+
+import json
+import csv
+import io
+from datetime import datetime
+from typing import Dict, List, Optional, Any
+from pathlib import Path
+
+# Optional imports for advanced formats
+try:
+    from reportlab.lib.pagesizes import letter, A4
+    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+    from reportlab.lib.units import inch
+    from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
+    from reportlab.lib import colors
+    from reportlab.pdfgen import canvas
+    from reportlab.lib.enums import TA_CENTER, TA_LEFT, TA_RIGHT
+    HAS_REPORTLAB = True
+except ImportError:
+    HAS_REPORTLAB = False
+
+try:
+    import svgwrite
+    HAS_SVGWRITE = True
+except ImportError:
+    HAS_SVGWRITE = False
+
+
+class ChartExporter:
+    """Exportateur de thèmes astrologiques vers différents formats"""
+    
+    def __init__(self):
+        self.supported_formats = ['json', 'csv', 'txt', 'html']
+        if HAS_REPORTLAB:
+            self.supported_formats.append('pdf')
+        if HAS_SVGWRITE:
+            self.supported_formats.append('svg')
+    
+    def export_chart(self, chart_data: Dict, format: str, output_path: str, 
+                    options: Optional[Dict] = None) -> bool:
+        """
+        Exporte un thème dans le format spécifié
+        
+        Args:
+            chart_data: Données du thème astrologique
+            format: Format d'export ('pdf', 'svg', 'json', 'csv', 'txt', 'html')
+            output_path: Chemin de sortie
+            options: Options supplémentaires
+            
+        Returns:
+            True si succès, False sinon
+        """
+        if format not in self.supported_formats:
+            raise ValueError(f"Format non supporté: {format}. "
+                           f"Formats disponibles: {self.supported_formats}")
+        
+        if options is None:
+            options = self.get_default_options()
+        
+        try:
+            if format == 'pdf':
+                return self.export_pdf(chart_data, output_path, options)
+            elif format == 'svg':
+                return self.export_svg(chart_data, output_path, options)
+            elif format == 'json':
+                return self.export_json(chart_data, output_path, options)
+            elif format == 'csv':
+                return self.export_csv(chart_data, output_path, options)
+            elif format == 'txt':
+                return self.export_txt(chart_data, output_path, options)
+            elif format == 'html':
+                return self.export_html(chart_data, output_path, options)
+            else:
+                return False
+                
+        except Exception as e:
+            print(f"Erreur lors de l'export {format}: {e}")
+            return False
+    
+    def get_default_options(self) -> Dict:
+        """Retourne les options par défaut"""
+        return {
+            'include_positions': True,
+            'include_aspects': True,
+            'include_houses': True,
+            'include_interpretations': True,
+            'include_chart_wheel': True,
+            'language': 'fr',
+            'page_size': 'A4',
+            'orientation': 'portrait',
+            'theme': 'modern'
+        }
+    
+    def export_pdf(self, chart_data: Dict, output_path: str, options: Dict) -> bool:
+        """Exporte en format PDF"""
+        if not HAS_REPORTLAB:
+            print("ReportLab non installé. Installation: pip install reportlab")
+            return False
+        
+        try:
+            doc = SimpleDocTemplate(
+                output_path,
+                pagesize=A4,
+                rightMargin=72,
+                leftMargin=72,
+                topMargin=72,
+                bottomMargin=18
+            )
+            
+            # Styles
+            styles = getSampleStyleSheet()
+            title_style = ParagraphStyle(
+                'CustomTitle',
+                parent=styles['Heading1'],
+                fontSize=24,
+                textColor=colors.HexColor("#4fbdba"),
+                alignment=TA_CENTER,
+                spaceAfter=30
+            )
+            
+            heading_style = ParagraphStyle(
+                'CustomHeading',
+                parent=styles['Heading2'],
+                fontSize=16,
+                textColor=colors.HexColor("#e94560"),
+                spaceAfter=12
+            )
+            
+            text_style = ParagraphStyle(
+                'CustomText',
+                parent=styles['Normal'],
+                fontSize=11,
+                textColor=colors.black,
+                spaceAfter=6
+            )
+            
+            # Contenu du document
+            story = []
+            
+            # Page de titre
+            self._add_pdf_title_page(story, chart_data, title_style)
+            
+            # Données de naissance
+            self._add_pdf_birth_data(story, chart_data, heading_style, text_style)
+            
+            # Positions planétaires
+            if options.get('include_positions', True):
+                self._add_pdf_positions(story, chart_data, heading_style, text_style)
+            
+            # Table des aspects
+            if options.get('include_aspects', True):
+                self._add_pdf_aspects(story, chart_data, heading_style, text_style)
+            
+            # Maisons
+            if options.get('include_houses', True):
+                self._add_pdf_houses(story, chart_data, heading_style, text_style)
+            
+            # Interprétations
+            if options.get('include_interpretations', True):
+                self._add_pdf_interpretations(story, chart_data, heading_style, text_style)
+            
+            # Générer le PDF
+            doc.build(story)
+            return True
+            
+        except Exception as e:
+            print(f"Erreur lors de la création du PDF: {e}")
+            return False
+    
+    def _add_pdf_title_page(self, story: List, chart_data: Dict, title_style):
+        """Ajoute la page de titre au PDF"""
+        birth_data = chart_data['birth_data']
+        
+        # Titre
+        title = Paragraph("Thème Natal", title_style)
+        story.append(title)
+        
+        # Logo ou symbole
+        story.append(Spacer(1, 50))
+        
+        # Informations de base
+        date_str = birth_data['date'].strftime("%d %B %Y à %H:%M")
+        place_str = f"{birth_data['latitude']:.4f}°, {birth_data['longitude']:.4f}°"
+        
+        info_data = [
+            ['Date de naissance:', date_str],
+            ['Lieu:', place_str],
+            ['Fuseau horaire:', birth_data['timezone']],
+            ['Système de maisons:', chart_data['config']['house_system']]
+        ]
+        
+        info_table = Table(info_data, colWidths=[120, 300])
+        info_table.setStyle(TableStyle([
+            ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
+            ('FONTNAME', (0, 0), (0, -1), 'Helvetica-Bold'),
+            ('FONTSIZE', (0, 0), (-1, -1), 12),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 12),
+        ]))
+        
+        story.append(info_table)
+        story.append(Spacer(1, 100))
+        
+        # Footer
+        footer_style = ParagraphStyle(
+            'Footer',
+            fontSize=10,
+            textColor=colors.grey,
+            alignment=TA_CENTER
+        )
+        
+        footer = Paragraph(
+            f"Généré par Astrolog Python - {datetime.now().strftime('%d/%m/%Y %H:%M')}",
+            footer_style
+        )
+        story.append(footer)
+        
+        # Nouvelle page
+        story.append(Spacer(1, 50))
+    
+    def _add_pdf_birth_data(self, story: List, chart_data: Dict, heading_style, text_style):
+        """Ajoute les données de naissance au PDF"""
+        birth_data = chart_data['birth_data']
+        
+        story.append(Paragraph("Données de Naissance", heading_style))
+        story.append(Spacer(1, 12))
+        
+        # Tableau des coordonnées
+        coord_data = [
+            ['Latitude:', f"{birth_data['latitude']:.4f}°"],
+            ['Longitude:', f"{birth_data['longitude']:.4f}°"],
+            ['Jour Julien:', f"{birth_data['julian_day']:.6f}"]
+        ]
+        
+        coord_table = Table(coord_data, colWidths=[100, 200])
+        coord_table.setStyle(TableStyle([
+            ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
+            ('FONTNAME', (0, 0), (0, -1), 'Helvetica-Bold'),
+            ('FONTSIZE', (0, 0), (-1, -1), 11),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 6),
+        ]))
+        
+        story.append(coord_table)
+        story.append(Spacer(1, 20))
+    
+    def _add_pdf_positions(self, story: List, chart_data: Dict, heading_style, text_style):
+        """Ajoute les positions planétaires au PDF"""
+        story.append(Paragraph("Positions Planétaires", heading_style))
+        story.append(Spacer(1, 12))
+        
+        # Préparer les données du tableau
+        positions_data = [['Planète', 'Signe', 'Degré', 'Maison', 'Rétro']]
+        
+        for planet, data in chart_data['planet_positions'].items():
+            longitude = data['longitude']
+            sign_index = int(longitude // 30)
+            sign_name = ZODIAC_SIGNS[sign_index]
+            sign_symbol = ZODIAC_SYMBOLS[sign_index]
+            
+            degrees = int(longitude % 30)
+            minutes = int((longitude % 1) * 60)
+            
+            house = chart_data['planet_houses'].get(planet, 0)
+            retrograde = "Oui" if data.get('retrograde', False) else "Non"
+            
+            positions_data.append([
+                planet,
+                f"{sign_symbol} {sign_name}",
+                f"{degrees}°{minutes:02d}'",
+                str(house),
+                retrograde
+            ])
+        
+        # Créer le tableau
+        positions_table = Table(positions_data)
+        positions_table.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor("#16213e")),
+            ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
+            ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+            ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+            ('FONTSIZE', (0, 0), (-1, 0), 12),
+            ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
+            ('BACKGROUND', (0, 1), (-1, -1), colors.HexColor("#f0f0f0")),
+            ('GRID', (0, 0), (-1, -1), 1, colors.HexColor("#4fbdba"))
+        ]))
+        
+        story.append(positions_table)
+        story.append(Spacer(1, 20))
+    
+    def _add_pdf_aspects(self, story: List, chart_data: Dict, heading_style, text_style):
+        """Ajoute les aspects au PDF"""
+        story.append(Paragraph("Aspects Principaux", heading_style))
+        story.append(Spacer(1, 12))
+        
+        aspects_data = [['Planètes', 'Aspect', 'Orb', 'Type']]
+        
+        for aspect in chart_data['aspects'][:10]:  # Top 10 aspects
+            planets_text = f"{aspect['planet1']} - {aspect['planet2']}"
+            aspects_data.append([
+                planets_text,
+                aspect['aspect'],
+                f"{aspect['orb']:.1f}°",
+                aspect['type']
+            ])
+        
+        aspects_table = Table(aspects_data)
+        aspects_table.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor("#e94560")),
+            ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
+            ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+            ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+            ('FONTSIZE', (0, 0), (-1, 0), 12),
+            ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
+            ('BACKGROUND', (0, 1), (-1, -1), colors.HexColor("#f9f9f9")),
+            ('GRID', (0, 0), (-1, -1), 1, colors.HexColor("#4fbdba"))
+        ]))
+        
+        story.append(aspects_table)
+        story.append(Spacer(1, 20))
+    
+    def _add_pdf_houses(self, story: List, chart_data: Dict, heading_style, text_style):
+        """Ajoute les maisons au PDF"""
+        story.append(Paragraph("Maisons Astrologiques", heading_style))
+        story.append(Spacer(1, 12))
+        
+        houses_data = [['Maison', 'Degré', 'Signe']]
+        
+        houses = chart_data['house_data']['houses']
+        system = chart_data['house_data']['system']
+        
+        for i, cusp in enumerate(houses):
+            sign_index = int(cusp // 30)
+            sign_name = ZODIAC_SIGNS[sign_index]
+            sign_symbol = ZODIAC_SYMBOLS[sign_index]
+            
+            degrees = int(cusp % 30)
+            minutes = int((cusp % 1) * 60)
+            
+            houses_data.append([
+                str(i + 1),
+                f"{degrees}°{minutes:02d}'",
+                f"{sign_symbol} {sign_name}"
+            ])
+        
+        houses_table = Table(houses_data)
+        houses_table.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor("#0f3460")),
+            ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
+            ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+            ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+            ('FONTSIZE', (0, 0), (-1, 0), 12),
+            ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
+            ('BACKGROUND', (0, 1), (-1, -1), colors.HexColor("#f9f9f9")),
+            ('GRID', (0, 0), (-1, -1), 1, colors.HexColor("#4fbdba"))
+        ]))
+        
+        story.append(houses_table)
+        story.append(Spacer(1, 20))
+    
+    def _add_pdf_interpretations(self, story: List, chart_data: Dict, heading_style, text_style):
+        """Ajoute les interprétations au PDF"""
+        interpretations = chart_data.get('interpretations', {})
+        
+        if interpretations.get('summary'):
+            story.append(Paragraph("Interprétation Générale", heading_style))
+            story.append(Spacer(1, 12))
+            story.append(Paragraph(interpretations['summary'], text_style))
+            story.append(Spacer(1, 20))
+    
+    def export_svg(self, chart_data: Dict, output_path: str, options: Dict) -> bool:
+        """Exporte en format SVG"""
+        if not HAS_SVGWRITE:
+            print("svgwrite non installé. Installation: pip install svgwrite")
+            return False
+        
+        try:
+            dwg = svgwrite.Drawing(output_path, profile='tiny')
+            
+            # Dimensions
+            width = 800
+            height = 800
+            center_x = width // 2
+            center_y = height // 2
+            radius = 300
+            
+            # Fond
+            dwg.add(dwg.rect(insert=(0, 0), size=(width, height), 
+                           fill='#0f3460'))
+            
+            # Carte astrologique
+            self._add_svg_chart_wheel(dwg, chart_data, center_x, center_y, radius)
+            
+            # Informations textuelles
+            self._add_svg_info(dwg, chart_data, width, height)
+            
+            # Sauvegarder
+            dwg.save()
+            return True
+            
+        except Exception as e:
+            print(f"Erreur lors de la création du SVG: {e}")
+            return False
+    
+    def _add_svg_chart_wheel(self, dwg, chart_data: Dict, center_x: int, center_y: int, radius: int):
+        """Ajoute la roue astrologique au SVG"""
+        # Cercles concentriques
+        for r in [radius * 0.6, radius * 0.8, radius * 0.95, radius]:
+            dwg.add(dwg.circle(center=(center_x, center_y), r=r,
+                             stroke='#4fbdba', stroke_width=1, fill='none'))
+        
+        # Maisons
+        houses = chart_data['house_data']['houses']
+        for i, cusp in enumerate(houses):
+            angle = math.radians(cusp)
+            x1 = center_x + radius * 0.6 * math.cos(angle)
+            y1 = center_y + radius * 0.6 * math.sin(angle)
+            x2 = center_x + radius * math.cos(angle)
+            y2 = center_y + radius * math.sin(angle)
+            
+            dwg.add(dwg.line(start=(x1, y1), end=(x2, y2),
+                           stroke='#e94560', stroke_width=1.5))
+        
+        # Planètes
+        positions = chart_data['planet_positions']
+        planet_radius = radius * 0.8
+        
+        for planet, data in positions.items():
+            longitude = data['longitude']
+            angle = math.radians(longitude)
+            x = center_x + planet_radius * math.cos(angle)
+            y = center_y + planet_radius * math.sin(angle)
+            
+            # Cercle de la planète
+            dwg.add(dwg.circle(center=(x, y), r=8,
+                             fill='#4fbdba', stroke='white', stroke_width=2))
+            
+            # Symbole de la planète
+            symbol = PLANET_SYMBOLS.get(planet, planet[0])
+            dwg.add(dwg.text(symbol, insert=(x-5, y+4), 
+                           fill='white', font_size='12px', font_weight='bold'))
+    
+    def _add_svg_info(self, dwg, chart_data: Dict, width: int, height: int):
+        """Ajoute les informations textuelles au SVG"""
+        birth_data = chart_data['birth_data']
+        
+        # Titre
+        dwg.add(dwg.text("Thème Natal", insert=(50, 50),
+                       fill='#4fbdba', font_size='24px', font_weight='bold'))
+        
+        # Date et lieu
+        date_str = birth_data['date'].strftime("%d %B %Y à %H:%M")
+        place_str = f"{birth_data['latitude']:.4f}°, {birth_data['longitude']:.4f}°"
+        
+        dwg.add(dwg.text(f"Date: {date_str}", insert=(50, 80),
+                       fill='#eee', font_size='14px'))
+        dwg.add(dwg.text(f"Lieu: {place_str}", insert=(50, 100),
+                       fill='#eee', font_size='14px'))
+    
+    def export_json(self, chart_data: Dict, output_path: str, options: Dict) -> bool:
+        """Exporte en format JSON"""
+        try:
+            # Préparer les données pour la sérialisation
+            export_data = self.prepare_json_data(chart_data)
+            
+            with open(output_path, 'w', encoding='utf-8') as f:
+                json.dump(export_data, f, indent=2, ensure_ascii=False, 
+                         default=str)
+            
+            return True
+            
+        except Exception as e:
+            print(f"Erreur lors de l'export JSON: {e}")
+            return False
+    
+    def prepare_json_data(self, chart_data: Dict) -> Dict:
+        """Prépare les données pour la sérialisation JSON"""
+        # Copie des données avec conversion des objets datetime
+        data = chart_data.copy()
+        
+        # Convertir les dates en chaînes ISO
+        if 'birth_data' in data:
+            birth_data = data['birth_data'].copy()
+            if 'date' in birth_data:
+                birth_data['date'] = birth_data['date'].isoformat()
+            data['birth_data'] = birth_data
+        
+        return data
+    
+    def export_csv(self, chart_data: Dict, output_path: str, options: Dict) -> bool:
+        """Exporte en format CSV"""
+        try:
+            with open(output_path, 'w', newline='', encoding='utf-8') as csvfile:
+                writer = csv.writer(csvfile)
+                
+                # En-tête
+                writer.writerow(['Astrolog Python - Export CSV'])
+                writer.writerow(['Date:', chart_data['birth_data']['date'].strftime("%Y-%m-%d %H:%M")])
+                writer.writerow(['Latitude:', f"{chart_data['birth_data']['latitude']:.4f}°"])
+                writer.writerow(['Longitude:', f"{chart_data['birth_data']['longitude']:.4f}°"])
+                writer.writerow([])
+                
+                # Positions planétaires
+                writer.writerow(['POSITIONS PLANÉTAIRES'])
+                writer.writerow(['Planète', 'Longitude', 'Signe', 'Maison', 'Rétrograde'])
+                
+                for planet, data in chart_data['planet_positions'].items():
+                    longitude = data['longitude']
+                    sign_index = int(longitude // 30)
+                    sign_name = ZODIAC_SIGNS[sign_index]
+                    
+                    house = chart_data['planet_houses'].get(planet, 0)
+                    retrograde = 'Oui' if data.get('retrograde', False) else 'Non'
+                    
+                    writer.writerow([
+                        planet,
+                        f"{longitude:.2f}°",
+                        sign_name,
+                        house,
+                        retrograde
+                    ])
+                
+                writer.writerow([])
+                
+                # Aspects
+                writer.writerow(['ASPECTS'])
+                writer.writerow(['Planète 1', 'Planète 2', 'Aspect', 'Orb', 'Type'])
+                
+                for aspect in chart_data['aspects'][:10]:  # Top 10
+                    writer.writerow([
+                        aspect['planet1'],
+                        aspect['planet2'],
+                        aspect['aspect'],
+                        f"{aspect['orb']:.2f}°",
+                        aspect['type']
+                    ])
+                
+                writer.writerow([])
+                
+                # Maisons
+                writer.writerow(['MAISONS'])
+                writer.writerow(['Maison', 'Degré', 'Signe'])
+                
+                houses = chart_data['house_data']['houses']
+                for i, cusp in enumerate(houses):
+                    sign_index = int(cusp // 30)
+                    sign_name = ZODIAC_SIGNS[sign_index]
+                    
+                    writer.writerow([
+                        i + 1,
+                        f"{cusp:.2f}°",
+                        sign_name
+                    ])
+            
+            return True
+            
+        except Exception as e:
+            print(f"Erreur lors de l'export CSV: {e}")
+            return False
+    
+    def export_txt(self, chart_data: Dict, output_path: str, options: Dict) -> bool:
+        """Exporte en format texte brut"""
+        try:
+            with open(output_path, 'w', encoding='utf-8') as f:
+                # En-tête
+                f.write("=" * 60 + "\n")
+                f.write("THÈME NATAL - ASTROLOG PYTHON\n")
+                f.write("=" * 60 + "\n\n")
+                
+                # Données de naissance
+                birth_data = chart_data['birth_data']
+                f.write("DONNÉES DE NAISSANCE\n")
+                f.write("-" * 30 + "\n")
+                f.write(f"Date: {birth_data['date'].strftime('%d %B %Y à %H:%M')}\n")
+                f.write(f"Latitude: {birth_data['latitude']:.4f}°\n")
+                f.write(f"Longitude: {birth_data['longitude']:.4f}°\n")
+                f.write(f"Fuseau horaire: {birth_data['timezone']}\n")
+                f.write(f"Jour Julien: {birth_data['julian_day']:.6f}\n\n")
+                
+                # Positions planétaires
+                f.write("POSITIONS PLANÉTAIRES\n")
+                f.write("-" * 30 + "\n")
+                
+                for planet, data in chart_data['planet_positions'].items():
+                    longitude = data['longitude']
+                    sign_index = int(longitude // 30)
+                    sign_name = ZODIAC_SIGNS[sign_index]
+                    
+                    degrees = int(longitude % 30)
+                    minutes = int((longitude % 1) * 60)
+                    
+                    house = chart_data['planet_houses'].get(planet, 0)
+                    retrograde = " (R)" if data.get('retrograde', False) else ""
+                    
+                    f.write(f"{planet:12} {degrees:2d}°{minutes:02d}' {sign_name:<12} "
+                           f"Maison {house:2d}{retrograde}\n")
+                
+                f.write("\n")
+                
+                # Aspects
+                f.write("ASPECTS PRINCIPAUX\n")
+                f.write("-" * 30 + "\n")
+                
+                for aspect in chart_data['aspects'][:10]:
+                    f.write(f"{aspect['planet1']:<10} {aspect['aspect']:<12} "
+                           f"{aspect['planet2']:<10} "
+                           f"Orb: {aspect['orb']:5.2f}°\n")
+                
+                f.write("\n")
+                
+                # Maisons
+                f.write("MAISONS ASTROLOGIQUES\n")
+                f.write("-" * 30 + "\n")
+                
+                houses = chart_data['house_data']['houses']
+                for i, cusp in enumerate(houses):
+                    sign_index = int(cusp // 30)
+                    sign_name = ZODIAC_SIGNS[sign_index]
+                    
+                    degrees = int(cusp % 30)
+                    minutes = int((cusp % 1) * 60)
+                    
+                    f.write(f"Maison {i+1:2d}: {degrees:2d}°{minutes:02d}' {sign_name}\n")
+                
+                f.write("\n")
+                
+                # Éléments et modalités
+                f.write("RÉPARTITION ÉLÉMENTAIRE\n")
+                f.write("-" * 30 + "\n")
+                
+                element_counts = chart_data['element_counts']
+                total = sum(element_counts.values())
+                
+                for element, count in element_counts.items():
+                    percentage = (count / total * 100) if total > 0 else 0
+                    f.write(f"{element:<8} {count:2d} ({percentage:5.1f}%)\n")
+                
+                f.write("\n")
+                
+                # Interprétations
+                interpretations = chart_data.get('interpretations', {})
+                if interpretations.get('summary'):
+                    f.write("INTERPRÉTATION\n")
+                    f.write("-" * 30 + "\n")
+                    f.write(f"{interpretations['summary']}\n")
+                
+                f.write("\n" + "=" * 60 + "\n")
+                f.write(f"Généré par Astrolog Python - {datetime.now().strftime('%d/%m/%Y %H:%M')}\n")
+            
+            return True
+            
+        except Exception as e:
+            print(f"Erreur lors de l'export TXT: {e}")
+            return False
+    
+    def export_html(self, chart_data: Dict, output_path: str, options: Dict) -> bool:
+        """Exporte en format HTML"""
+        try:
+            html_content = self.generate_html_content(chart_data, options)
+            
+            with open(output_path, 'w', encoding='utf-8') as f:
+                f.write(html_content)
+            
+            return True
+            
+        except Exception as e:
+            print(f"Erreur lors de l'export HTML: {e}")
+            return False
+    
+    def generate_html_content(self, chart_data: Dict, options: Dict) -> str:
+        """Génère le contenu HTML"""
+        birth_data = chart_data['birth_data']
+        
+        html = f"""<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Thème Natal - Astrolog Python</title>
+    <style>
+        body {{
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            margin: 0;
+            padding: 20px;
+            background-color: #1a1a2e;
+            color: #eee;
+            line-height: 1.6;
+        }}
+        .container {{
+            max-width: 800px;
+            margin: 0 auto;
+            background-color: #16213e;
+            padding: 30px;
+            border-radius: 10px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.3);
+        }}
+        h1, h2, h3 {{
+            color: #4fbdba;
+        }}
+        h1 {{
+            text-align: center;
+            font-size: 2.5em;
+            margin-bottom: 30px;
+        }}
+        h2 {{
+            border-bottom: 2px solid #4fbdba;
+            padding-bottom: 10px;
+            margin-top: 30px;
+        }}
+        .info-grid {{
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 20px;
+            margin: 20px 0;
+        }}
+        .info-item {{
+            background-color: #0f3460;
+            padding: 15px;
+            border-radius: 8px;
+        }}
+        .info-label {{
+            color: #4fbdba;
+            font-weight: bold;
+            margin-bottom: 5px;
+        }}
+        table {{
+            width: 100%;
+            border-collapse: collapse;
+            margin: 20px 0;
+            background-color: #0f3460;
+            border-radius: 8px;
+            overflow: hidden;
+        }}
+        th, td {{
+            padding: 12px;
+            text-align: left;
+            border-bottom: 1px solid #4fbdba;
+        }}
+        th {{
+            background-color: #4fbdba;
+            color: #1a1a2e;
+            font-weight: bold;
+        }}
+        tr:hover {{
+            background-color: rgba(79, 189, 186, 0.1);
+        }}
+        .aspect-row {{
+            display: flex;
+            justify-content: space-between;
+            padding: 10px;
+            margin: 5px 0;
+            background-color: #0f3460;
+            border-radius: 5px;
+        }}
+        .footer {{
+            text-align: center;
+            margin-top: 40px;
+            padding-top: 20px;
+            border-top: 1px solid #4fbdba;
+            color: #4fbdba;
+        }}
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>✦ Thème Natal</h1>
+        
+        <h2>Données de Naissance</h2>
+        <div class="info-grid">
+            <div class="info-item">
+                <div class="info-label">Date</div>
+                <div>{birth_data['date'].strftime('%d %B %Y à %H:%M')}</div>
+            </div>
+            <div class="info-item">
+                <div class="info-label">Latitude</div>
+                <div>{birth_data['latitude']:.4f}°</div>
+            </div>
+            <div class="info-item">
+                <div class="info-label">Longitude</div>
+                <div>{birth_data['longitude']:.4f}°</div>
+            </div>
+            <div class="info-item">
+                <div class="info-label">Fuseau horaire</div>
+                <div>{birth_data['timezone']}</div>
+            </div>
+        </div>
+        """
+        
+        # Positions planétaires
+        if options.get('include_positions', True):
+            html += """
+        <h2>Positions Planétaires</h2>
+        <table>
+            <thead>
+                <tr>
+                    <th>Planète</th>
+                    <th>Position</th>
+                    <th>Signe</th>
+                    <th>Maison</th>
+                    <th>Rétrograde</th>
+                </tr>
+            </thead>
+            <tbody>
+            """
+            
+            for planet, data in chart_data['planet_positions'].items():
+                longitude = data['longitude']
+                sign_index = int(longitude // 30)
+                sign_name = ZODIAC_SIGNS[sign_index]
+                sign_symbol = ZODIAC_SYMBOLS[sign_index]
+                
+                degrees = int(longitude % 30)
+                minutes = int((longitude % 1) * 60)
+                
+                house = chart_data['planet_houses'].get(planet, 0)
+                retrograde = "Oui" if data.get('retrograde', False) else "Non"
+                
+                html += f"""
+                <tr>
+                    <td>{planet}</td>
+                    <td>{degrees}°{minutes:02d}'</td>
+                    <td>{sign_symbol} {sign_name}</td>
+                    <td>{house}</td>
+                    <td>{retrograde}</td>
+                </tr>
+                """
+            
+            html += """
+            </tbody>
+        </table>
+            """
+        
+        # Aspects
+        if options.get('include_aspects', True):
+            html += """
+        <h2>Aspects Principaux</h2>
+            """
+            
+            for aspect in chart_data['aspects'][:10]:
+                html += f"""
+        <div class="aspect-row">
+            <span>{aspect['planet1']} - {aspect['planet2']}</span>
+            <span>{aspect['aspect']}</span>
+            <span>Orb: {aspect['orb']:.2f}°</span>
+            <span>{aspect['type']}</span>
+        </div>
+                """
+        
+        # Maisons
+        if options.get('include_houses', True):
+            html += """
+        <h2>Maisons Astrologiques</h2>
+        <table>
+            <thead>
+                <tr>
+                    <th>Maison</th>
+                    <th>Degré</th>
+                    <th>Signe</th>
+                </tr>
+            </thead>
+            <tbody>
+            """
+            
+            houses = chart_data['house_data']['houses']
+            for i, cusp in enumerate(houses):
+                sign_index = int(cusp // 30)
+                sign_name = ZODIAC_SIGNS[sign_index]
+                sign_symbol = ZODIAC_SYMBOLS[sign_index]
+                
+                degrees = int(cusp % 30)
+                minutes = int((cusp % 1) * 60)
+                
+                html += f"""
+                <tr>
+                    <td>{i + 1}</td>
+                    <td>{degrees}°{minutes:02d}'</td>
+                    <td>{sign_symbol} {sign_name}</td>
+                </tr>
+                """
+            
+            html += """
+            </tbody>
+        </table>
+            """
+        
+        # Éléments
+        html += """
+        <h2>Répartition Élémentaire</h2>
+        <table>
+            <thead>
+                <tr>
+                    <th>Élément</th>
+                    <th>Nombre</th>
+                    <th>Pourcentage</th>
+                </tr>
+            </thead>
+            <tbody>
+        """
+        
+        element_counts = chart_data['element_counts']
+        total = sum(element_counts.values())
+        
+        for element, count in element_counts.items():
+            percentage = (count / total * 100) if total > 0 else 0
+            html += f"""
+                <tr>
+                    <td>{element}</td>
+                    <td>{count}</td>
+                    <td>{percentage:.1f}%</td>
+                </tr>
+            """
+        
+        html += """
+            </tbody>
+        </table>
+        """
+        
+        # Footer
+        html += f"""
+        <div class="footer">
+            <p>Généré par Astrolog Python</p>
+            <p>{datetime.now().strftime('%d/%m/%Y à %H:%M')}</p>
+        </div>
+    </div>
+</body>
+</html>
+        """
+        
+        return html
+
+
+class ExportManager:
+    """Gestionnaire principal des exports"""
+    
+    def __init__(self):
+        self.exporter = ChartExporter()
+    
+    def export_chart_with_dialog(self, chart_data: Dict, default_format: str = 'pdf') -> Optional[str]:
+        """
+        Exporte avec dialogue de sélection
+        Retourne le chemin du fichier exporté ou None si annulé
+        """
+        from PySide6.QtWidgets import QFileDialog
+        
+        # Mapping des formats avec filtres
+        format_filters = {
+            'pdf': "PDF Files (*.pdf)",
+            'svg': "SVG Files (*.svg)",
+            'json': "JSON Files (*.json)",
+            'csv': "CSV Files (*.csv)",
+            'txt': "Text Files (*.txt)",
+            'html': "HTML Files (*.html)"
+        }
+        
+        filter_string = format_filters.get(default_format, "All Files (*)")
+        
+        file_path, _ = QFileDialog.getSaveFileName(
+            None,
+            "Exporter le thème",
+            "",
+            filter_string
+        )
+        
+        if file_path:
+            success = self.exporter.export_chart(chart_data, default_format, file_path)
+            if success:
+                return file_path
+        
+        return None
+    
+    def get_export_summary(self, chart_data: Dict) -> Dict[str, Any]:
+        """Retourne un résumé des données exportables"""
+        return {
+            'total_planets': len(chart_data.get('planet_positions', {})),
+            'total_aspects': len(chart_data.get('aspects', [])),
+            'house_system': chart_data.get('config', {}).get('house_system', 'P'),
+            'birth_date': chart_data.get('birth_data', {}).get('date'),
+            'formats_available': self.exporter.supported_formats.copy()
+        }
